@@ -1,0 +1,64 @@
+version: '3'
+services:
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=my-auto-instrumented-app
+      # Variables for @bradesco/ensc-lib-cloudjs-logging to enable OTLP transport
+      # Technical Logs (req.log)
+      #- LOG_TECNICO_OTLP_ENABLED=true
+      #- LOG_TECNICO_OTLP_PROTOCOL=grpc
+      #- LOG_TECNICO_OTLP_HOST=otel-collector
+      #- LOG_TECNICO_OTLP_PORT=4317
+      # Business Logs (req.business.log)
+      #- LOG_SERVICO_CANAL_OTLP_ENABLED=true
+      #- LOG_SERVICO_CANAL_OTLP_PROTOCOL=grpc
+      #- LOG_SERVICO_CANAL_OTLP_HOST=otel-collector
+      #- LOG_SERVICO_CANAL_OTLP_PORT=4317
+    depends_on:
+      - otel-collector
+    # No ports exposed? Maybe user wants to access it?
+    # I'll expose 3000 just in case, typical node port.
+    ports:
+      - "8080:8080"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: [ "--config=/etc/otel-collector-config.yaml" ]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+    depends_on:
+      - elasticsearch
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    container_name: otel-stack-elasticsearch-1
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'" ]
+      interval: 10s
+      timeout: 10s
+      retries: 510
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.0
+    container_name: otel-stack-kibana-1
+    ports:
+      - "5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
